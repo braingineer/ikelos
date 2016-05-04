@@ -27,3 +27,5 @@ def compose(*layers):
     return func
 
 concat = lambda x: merge(x, mode='concat')
+def xor(a,b, v=None):
+    return (a is not v and b is v) or (a is v and b is not v)
