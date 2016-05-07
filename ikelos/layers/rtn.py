@@ -1,12 +1,12 @@
 '''
-recurrent tree network
+recurrent tree networks
 
 author: bcm
 '''
 
 
 from __future__ import absolute_import, print_function
-from keras.layers import Recurrent, time_distributed_dense
+from keras.layers import Recurrent, time_distributed_dense, LSTM
 import keras.backend as K
 from keras import activations, initializations, regularizers
 from keras.engine import Layer, InputSpec
@@ -141,14 +141,15 @@ class DualCurrent(Recurrent):
     def compute_mask(self, input, mask):
         if self.return_sequences:
             if isinstance(mask, list):
-                return mask[0]
-            return mask
+                return [mask[0], mask[0]]
+            return [mask, mask]
         else:
-            return None
+            return [None, None]
         
     def get_output_shape_for(self, input_shapes):
         rnn_shape, indices_shape = input_shapes
-        return super(DualCurrent, self).get_output_shape_for(rnn_shape)
+        out_shape = super(DualCurrent, self).get_output_shape_for(rnn_shape)
+        return [out_shape, out_shape]
 
     def preprocess_input(self, x):
         if self.consume_less == 'cpu':
@@ -255,10 +256,9 @@ class DualCurrent(Recurrent):
                 self.updates.append((self.states[i], states[i]))
             self.cached_states = states
 
-        if self.return_sequences:
-            return tree_outputs
-        else:
-            return last_summary
+        return [tree_outputs, summary_outputs]
+
+        
 
     def get_constants(self, x):
         constants = []
@@ -295,3 +295,97 @@ class DualCurrent(Recurrent):
                   "dropout_U": self.dropout_U}
         base_config = super(DualCurrent, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+
+
+
+
+class StackLSTM(LSTM):
+    def build(self, input_shapes):
+        assert isinstance(input_shapes, list)
+        rnn_shape, indices_shape = input_shapes
+        super(StackLSTM, self).build(rnn_shape)
+        self.input_spec += [InputSpec(shape=indices_shape)]
+
+    def get_initial_states(self, x):
+        # build an all-zero tensor of shape (samples, output_dim)
+        initial_state = K.zeros_like(x)  # (samples, timesteps, input_dim)
+        initial_state = K.permute_dimensions(x, [1,0,2]) # (timesteps, samples, input_dim)
+        reducer = K.zeros((self.input_dim, self.output_dim))
+        initial_state = K.dot(initial_state, reducer)  # (timesteps, samples, output_dim)
+        initial_states = [initial_state for _ in range(len(self.states))]
+        return initial_states
+
+    def reset_states(self):
+        assert self.stateful, 'Layer must be stateful.'
+        input_shape = self.input_spec[0].shape
+        if not input_shape[0]:
+            raise Exception('If a RNN is stateful, a complete ' +
+                            'input_shape must be provided (including batch size).')
+        if hasattr(self, 'states'):
+            K.set_value(self.states[0],
+                        np.zeros((input_shape[1], input_shape[0], self.output_dim)))
+            K.set_value(self.states[1],
+                        np.zeros((input_shape[1], input_shape[0], self.output_dim)))
+        else:
+            self.states = [K.zeros((input_shape[1], input_shape[0], self.output_dim)),
+                           K.zeros((input_shape[1], input_shape[0], self.output_dim))]
+    
+    def get_output_shape_for(self, input_shapes):
+        rnn_shape, indices_shape = input_shapes
+        return super(StackLSTM, self).get_output_shape_for(rnn_shape)
+
+    def compute_mask(self, input, mask):
+        if self.return_sequences:
+            if isinstance(mask, list):
+                return mask[0]
+            return mask
+        else:
+            return None
+    
+    def call(self, xpind, mask=None):
+        # input shape: (nb_samples, time (padded with zeros), input_dim)
+        # note that the .build() method of subclasses MUST define
+        # self.input_spec with a complete input shape.
+        x, indices = xpind
+        if isinstance(mask, list):
+            mask, _ = mask
+        input_shape = self.input_spec[0].shape
+        if K._BACKEND == 'tensorflow':
+            if not input_shape[1]:
+                raise Exception('When using TensorFlow, you should define '
+                                'explicitly the number of timesteps of '
+                                'your sequences.\n'
+                                'If your first layer is an Embedding, '
+                                'make sure to pass it an "input_length" '
+                                'argument. Otherwise, make sure '
+                                'the first layer has '
+                                'an "input_shape" or "batch_input_shape" '
+                                'argument, including the time axis. '
+                                'Found input shape at layer ' + self.name +
+                                ': ' + str(input_shape))
+        if self.stateful:
+            initial_states = self.states
+        else:
+            initial_states = self.get_initial_states(x)
+        constants = self.get_constants(x)
+        preprocessed_input = self.preprocess_input(x)
+
+        last_output, outputs, states = K.stack_rnn(self.step, 
+                                                   preprocessed_input,
+                                                   initial_states, 
+                                                   indices,
+                                                   go_backwards=self.go_backwards,
+                                                   mask=mask,
+                                                   constants=constants,
+                                                   unroll=self.unroll,
+                                                   input_length=input_shape[1])
+        if self.stateful:
+            self.updates = []
+            for i in range(len(states)):
+                self.updates.append((self.states[i], states[i]))
+            self.cached_states = states
+
+        if self.return_sequences:
+            return outputs
+        else:
+            return last_output
