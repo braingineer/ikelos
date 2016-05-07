@@ -24,7 +24,6 @@ class DataServer(object):
     """
     def __init__(self, config):
         self.__dict__.update(config)
-        log_name = self.saving_prefix
 
 
 

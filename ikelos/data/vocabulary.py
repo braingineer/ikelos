@@ -14,7 +14,9 @@ class Vocabulary(object):
     [1] Tim Vieira; https://github.com/timvieira/arsenal
     """
 
-    def __init__(self, random_int=None, use_mask=False, file_type="json", name=None):
+    def __init__(self, random_int=None, use_mask=False, file_type="json", name=None, 
+                                                        mode=None):
+
         self._mapping = {}   # str -> int
         self._flip = {}      # int -> str; timv: consider using array or list
         self._i = 0
@@ -23,6 +25,7 @@ class Vocabulary(object):
         self._random_int = random_int   # if non-zero, will randomly assign
                                         # integers (between 0 and randon_int) as
                                         # index (possibly with collisions)
+
         self.unk_symbol = "<UNK>"
         self.mask_symbol = "<MASK>"
         self.start_symbol = "<START>"
@@ -32,6 +35,8 @@ class Vocabulary(object):
             self.add(self.mask_symbol)
         self.file_type = file_type
         self.name = name or "anonymous"
+
+
 
     def __repr__(self):
         return 'Vocabulary(size=%s,frozen=%s)' % (len(self), self._frozen)
@@ -62,6 +67,16 @@ class Vocabulary(object):
         inst.add_many(s)
         return inst
 
+    @classmethod
+    def from_nlp_data(cls, iterable):
+        ''' ugly api... '''
+        vocab = cls()
+        vocab.use_mask = True
+        vocab.add(vocab.mask_symbol)
+        vocab.add(vocab.unk_symbol)
+        vocab.add_many(iterable)
+        return vocab
+
     def keyset(self):
         keys = set(self._mapping.keys())
         if self.mask_symbol in keys:
@@ -69,10 +84,21 @@ class Vocabulary(object):
         return keys
 
     def iterkeys(self):
-        return self._mapping.iterkeys()
+        for k in self._mapping.iterkeys():
+            if (k==self.unk_symbol or k==self.mask_symbol):
+                continue
+            else: 
+                yield k
+
+    def fullkeys(self):
+        return list(self._mapping.keys())
 
     def keys(self):
-        return list(self._mapping.keys())
+        return [k for k in list(self._mapping.keys()) if (k!=self.unk_symbol or
+                                                          k!=self.mask_symbol)]
+
+    ### items
+    #### iter items, fullitems and items
 
     def iteritems(self):
         for k,v in self._mapping.iteritems():
@@ -80,8 +106,20 @@ class Vocabulary(object):
                 continue
             yield k,v
 
-    def items(self):
+    def fullitems(self):
         return list(self._mapping.items())
+
+    def items(self):
+        return [(k,v) for k,v in list(self._mapping.items()) if (k!=self.unk_symbol or
+                                                                 k!=self.mask_symbol)]
+
+    def values(self):
+        return [v for k,v in list(self._mapping.items()) if (k!=self.unk_symbol or
+                                                             k!=self.mask_symbol)]
+
+    def fullvalues(self):
+        return list(self._mapping.values())
+
 
     def filter_generator(self, seq, emit_none=False):
         """
