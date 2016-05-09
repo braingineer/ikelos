@@ -5,6 +5,7 @@ __pycache__/
 
 *.vocab
 *.conf
+*.db
 
 # C extensions
 *.so

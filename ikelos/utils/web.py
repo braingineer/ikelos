@@ -3,9 +3,6 @@ import json
 from sqlitedict import SqliteDict
 app = Flask(__name__)
 
-@app.route("/")
-def index():
-	return "hi world"
 
 @app.route("/publish/parameters/", methods=['POST'])
 def handle_params():
@@ -13,7 +10,7 @@ def handle_params():
 	name = data.pop("name")
 	new_str = "<div class='parameters'><h1>{}</h1>".format(name)
 	for k,v in data.items():
-		new_str += "<br><div class='param_item'><b>{}</b> ::: {}</div>".format(k, v)
+		new_str += "<div class='param_item'><b>{}</b> ::: {}</div>".format(k, v)
 	new_str += "</div>"
 	with SqliteDict("web.db") as db:
 		db['experiment'] = new_str
@@ -30,7 +27,7 @@ def handle_data():
 	new_str = "<div class='epoch_data'><h2>epoch {}</h2>".format(epoch)
 	new_str += "<br><p>"
 	for k,v in data.items():
-		new_str += "<br><div class='epoch_data_item'><b>{}</b> ::: {}</div>".format(k, v)
+		new_str += "<div class='epoch_data_item'><b>{}</b> ::: {}</div>".format(k, v)
 	new_str += "</div>"
 	with SqliteDict('web.db') as db:
 		logs = db['logs']
@@ -39,16 +36,17 @@ def handle_data():
 		db.commit()
 	return '', 204
 
+@app.route("/")
 @app.route('/monitor')
 def monitor():
 	with SqliteDict('web.db') as db:
 		exp = db['experiment'] if 'experiment' in db else "None currently"
-		logs = db['logs'][::-1] if 'logs' in db else ""
+		logs = '\n'.join(db['logs'][::-1]) if 'logs' in db else ""
 		return """
-		<h1>talos experiment page</h1><br>
+		<h1>ada experiment page</h1>
 		{}
 		{}
 		""".format(exp, logs)
 
 if __name__ == "__main__":
-	app.run(port=9000, debug=True)
+	app.run(port=11031, debug=True)
