@@ -36,7 +36,7 @@ class ClockworkRNN(SimpleRNN):
             mask[i*n:(i+1)*n, i*n:] = 1
             period[i*n:(i+1)*n] = t
         self.mask = K.variable(mask, name='clockword_mask')
-        self.period = K.variable(mask, dtype='int16', name='clockwork_period')
+        self.period = K.variable(period, dtype='int16', name='clockwork_period')
 
         super(ClockworkRNN, self).build(input_shape)
 
