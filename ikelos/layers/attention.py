@@ -74,6 +74,10 @@ class SoftAttention(ProbabilityTensor):
     '''
     Standard.  make probability distribution, weight, normalize. 
     '''
+    def __init__(self, return_probabilities=False, *args, **kwargs):
+        super(SoftAttention, self).__init__(*args, **kwargs)
+        self.return_probabilities = return_probabilities
+
     def get_output_shape_for(self, input_shape):
         # b,n,f -> b,f where f is weighted features summed across n
         return (input_shape[0], input_shape[2])
@@ -90,7 +94,15 @@ class SoftAttention(ProbabilityTensor):
         # b,n,f -> b,f via b,n broadcasted
         p_vectors = K.expand_dims(super(SoftAttention, self).call(x, mask), 2)
         expanded_p = K.repeat_elements(p_vectors, K.shape(x)[2], axis=2)
-        return K.sum(expanded_p * x, axis=1)
+        attended = K.sum(expanded_p * x, axis=1)
+        if self.return_probabilities:
+            return [attended, p_vectors]
+        return attended
+
+    def get_config(self):
+        config = {'return_probabilities': self.return_probabilities}
+        base_config = super(SoftAttention, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class EZAttend(Layer):
@@ -124,6 +136,9 @@ class Accumulator(SoftAttention):
     def get_output_shape_for(self, input_shape):
         ## this won't actually change the shape. it'll just accumulate up to t =)
         assert len(input_shape) == 3
+        if self.return_probabilities:
+            pvec_shape = (input_shape[0], input_shape[1], input_shape[1])
+            return [input_shape, pvec_shape]    
         return input_shape
 
     def build(self, input_shape):
@@ -132,24 +147,32 @@ class Accumulator(SoftAttention):
         self.input_spec = [InputSpec(shape=input_shape)]
 
     def compute_mask(self, x, mask=None):
+        if self.return_probabilities:
+            mask2 = mask
+            if mask is not None:
+                mask2 = K.expand_dims(K.all(mask2, axis=-1))
+            return [mask, mask2]
         return mask
 
     def attend_function(self, inputs, mask=None):
         # b,n,f -> b,f via b,n broadcasted
         inputs = K.permute_dimensions(inputs, (1,0,2)) ### assuming it comes from an unroller
+        if mask:
+            mask = K.permute_dimensions(mask, (1,0,2))
         output = super(Accumulator, self).call(inputs, mask)
         return output
 
     def call(self, x, mask=None):
         ''' assuming a 3dim tensor, batch,time,feat '''
         input_length = self.input_spec[0].shape[1]
-        results = accumulate(self.attend_function, x, input_length, mask)
+        results = accumulate(self.attend_function, x, input_length,
+                             mask=mask, return_probabilities=self.return_probabilities)
         return results
 
 
 
-def accumulate(attend_function, inputs, input_length, 
-                                go_backwards=False, mask=None):
+def accumulate(attend_function, inputs, input_length,
+                                mask=None, return_probabilities=False):
     '''get the running attention over a sequence. 
 
     given a 3dim tensor where the 1st dim is time (or not. whatever.),  calculating the running attended sum.
@@ -168,28 +191,43 @@ def accumulate(attend_function, inputs, input_length,
     inputs = inputs.dimshuffle(axes)
 
     indices = list(range(input_length))
-    if go_backwards:
-        indices = indices[::-1]
 
     successive_outputs = []
     if mask is not None:
         if mask.ndim == ndim-1:
-            mask = expand_dims(mask)
+            mask = K.expand_dims(mask)
         assert mask.ndim == ndim
         mask = mask.dimshuffle(axes)
         prev_output = None
 
     successive_outputs = []
+    successive_pvecs = []
+    uncover_mask = K.zeros_like(inputs)
+    uncover_indices = K.arange(input_length)
+    for _ in range(ndim-1):
+        uncover_indices = K.expand_dims(uncover_indices)
+    make_subset = lambda i,X: K.switch(uncover_indices <= i, X, uncover_mask)
     for i in indices:
+        inputs_i = make_subset(i,inputs)
+        mask_i = make_subset(i,mask)
         if mask is not None:
-            output = attend_function(inputs[:i+1], mask[:i+1]) # this should not output the time dimension; it should be marginalized over. 
+            output = attend_function(inputs_i, mask_i) # this should not output the time dimension; it should be marginalized over. 
         else:
-            output = attend_function(inputs[:i+1]) # this should not output the time dimension; it should be marginalized over. 
+            output = attend_function(inputs_i) # this should not output the time dimension; it should be marginalized over. 
+        if return_probabilities:
+            output, p_vectors = output
+            successive_pvecs.append(p_vectors)
         assert output.ndim == 2, "Your attention function is malfunctioning; the attention accumulator should return 2 dimensional tensors"
         successive_outputs.append(output)
     outputs = K.pack(successive_outputs)
     K.squeeze(outputs, -1)
-    # current assumption. modify if that changes. 
     axes = [1, 0] + list(range(2, outputs.ndim))
     outputs = outputs.dimshuffle(axes)
+
+    if return_probabilities:
+        out_pvecs = K.pack(successive_pvecs)
+        K.squeeze(out_pvecs, -1)
+        out_pvecs = out_pvecs.dimshuffle(axes)
+        outputs = [outputs, out_pvecs]
+
     return outputs

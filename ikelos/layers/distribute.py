@@ -1,7 +1,10 @@
 from __future__ import absolute_import, print_function
-from keras.layers import Recurrent, time_distributed_dense, LSTM, Wrapper
+from keras.layers import Recurrent, time_distributed_dense, LSTM, Wrapper, TimeDistributed
 import keras.backend as K
 from keras.engine import Layer, InputSpec
+
+
+Distribute = TimeDistributed
 
 class Summarize(Wrapper):
     def __init__(self, summarizer, *args, **kwargs):
