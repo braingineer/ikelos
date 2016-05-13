@@ -88,9 +88,9 @@ class ClockworkRNN(SimpleRNN):
     def step(self, x, states):
         prev_output = states[0]
         time_step = states[1]
-        B_U = states[1]
-        B_W = states[2]
-        period = states[3]
+        B_U = states[2]
+        B_W = states[3]
+        period = states[4]
 
         if self.consume_less == 'cpu':
             h = x
