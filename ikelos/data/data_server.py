@@ -5,11 +5,13 @@ import time
 import sys
 import numpy as np
 import itertools
+from ..utils import loggers
 from keras.utils.np_utils import to_categorical
 try:
     input = raw_input
 except:
     pass
+
 
 class DataServer(object):
     """
@@ -24,7 +26,8 @@ class DataServer(object):
     """
     def __init__(self, config):
         self.__dict__.update(config)
-
+        log_name = self.saving_prefix
+        self.logger = loggers.duallog(log_name, "info", "logs/", disable=self.disable_logger)
 
 
     def print_everything(self):

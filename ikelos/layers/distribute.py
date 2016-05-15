@@ -2,6 +2,7 @@ from __future__ import absolute_import, print_function
 from keras.layers import Recurrent, time_distributed_dense, LSTM, Wrapper, TimeDistributed
 import keras.backend as K
 from keras.engine import Layer, InputSpec
+import numpy as np
 
 
 Distribute = TimeDistributed

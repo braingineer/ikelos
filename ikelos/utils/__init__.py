@@ -1,5 +1,7 @@
 import keras.backend as K
 from keras.engine import merge
+from ..layers import PassThrough
+import loggers
 
 def normalize_mask(x, mask):
     '''Keep the mask align wtih the tensor x
@@ -17,14 +19,6 @@ def normalize_mask(x, mask):
             mask = K.expand_dims(mask)
     return K.any(mask, axis=-1, keepdims=True)
 
-
-def compose(*layers):
-    def func(x):
-        out = x
-        for layer in layers[::-1]:
-            out = layer(out)
-        return out
-    return func
 
 concat = lambda x: merge(x, mode='concat')
 def xor(a,b, v=None):
