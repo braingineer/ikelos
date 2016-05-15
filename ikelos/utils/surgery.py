@@ -1,5 +1,7 @@
 '''
 perform regular surgery operations
+
+work in progress.. definitely not guaranteed to be a working product.
 '''
 
 from keras.engine import Model
