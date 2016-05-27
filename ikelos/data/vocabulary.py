@@ -14,8 +14,8 @@ class Vocabulary(object):
     [1] Tim Vieira; https://github.com/timvieira/arsenal
     """
 
-    def __init__(self, random_int=None, use_mask=False, file_type="json", name=None, 
-                                                        mode=None):
+    def __init__(self, random_int=None, use_mask=False, mask_symbol='<MASK>', 
+                                        file_type="json", name=None, mode=None):
 
         self._mapping = {}   # str -> int
         self._flip = {}      # int -> str; timv: consider using array or list
@@ -27,7 +27,7 @@ class Vocabulary(object):
                                         # index (possibly with collisions)
 
         self.unk_symbol = "<UNK>"
-        self.mask_symbol = "<MASK>"
+        self.mask_symbol = mask_symbol
         self.start_symbol = "<START>"
         self.emit_unks = False
         self.use_mask = use_mask
@@ -59,7 +59,7 @@ class Vocabulary(object):
 
     @property
     def mask_id(self):
-        return self[self.mask_id]
+        return self[self.mask_symbol]
 
     @classmethod
     def from_iterable(cls, s, *args, **kwargs):
@@ -94,7 +94,7 @@ class Vocabulary(object):
         return list(self._mapping.keys())
 
     def keys(self):
-        return [k for k in list(self._mapping.keys()) if (k!=self.unk_symbol or
+        return [k for k in list(self._mapping.keys()) if (k!=self.unk_symbol and
                                                           k!=self.mask_symbol)]
 
     ### items
@@ -110,11 +110,11 @@ class Vocabulary(object):
         return list(self._mapping.items())
 
     def items(self):
-        return [(k,v) for k,v in list(self._mapping.items()) if (k!=self.unk_symbol or
+        return [(k,v) for k,v in list(self._mapping.items()) if (k!=self.unk_symbol and
                                                                  k!=self.mask_symbol)]
 
     def values(self):
-        return [v for k,v in list(self._mapping.items()) if (k!=self.unk_symbol or
+        return [v for k,v in list(self._mapping.items()) if (k!=self.unk_symbol and
                                                              k!=self.mask_symbol)]
 
     def fullvalues(self):
