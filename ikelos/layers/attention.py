@@ -105,6 +105,7 @@ class SoftAttention(ProbabilityTensor):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+
 class EZAttend(Layer):
     '''
     if you needed the probability distribution for loss purposes, have no fear!

@@ -299,11 +299,11 @@ class DualCurrent(Recurrent):
 
 
 
-class StackLSTM(LSTM):
+class BranchLSTM(LSTM):
     def build(self, input_shapes):
         assert isinstance(input_shapes, list)
         rnn_shape, indices_shape = input_shapes
-        super(StackLSTM, self).build(rnn_shape)
+        super(BranchLSTM, self).build(rnn_shape)
         self.input_spec += [InputSpec(shape=indices_shape)]
 
     def get_initial_states(self, x):
@@ -332,7 +332,7 @@ class StackLSTM(LSTM):
     
     def get_output_shape_for(self, input_shapes):
         rnn_shape, indices_shape = input_shapes
-        return super(StackLSTM, self).get_output_shape_for(rnn_shape)
+        return super(BranchLSTM, self).get_output_shape_for(rnn_shape)
 
     def compute_mask(self, input, mask):
         if self.return_sequences:
