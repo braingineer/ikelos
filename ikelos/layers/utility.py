@@ -4,10 +4,11 @@ author: bcm
 
 
 from __future__ import absolute_import, print_function
-from keras.layers import Flatten
+from keras.layers import Flatten, BatchNormalization, Activation
 import keras.backend as K
 from keras import activations, initializations, regularizers
 from keras.engine import Layer, InputSpec
+from keras.activations import get as get_activation
 
 
 class Fix(Flatten):
@@ -70,6 +71,13 @@ class Compose(object):
         for layer in self.layers[::-1]:
             out = layer(out)
         return out
+
+def batch_norm(layer, activation=None, kwargs=None):
+    kwargs = kwargs or {}
+    out = BatchNormalization(**kwargs)(layer)
+    if activation:
+        out = Activation(activation)(out)
+    return out
 
 def compose(*layers):
     return Compose(layers)
