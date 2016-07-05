@@ -157,7 +157,7 @@ class Vocabulary(object):
         try:
             return self._mapping[k]
         except KeyError:
-            if self.emit_unks and k != self.unk_symbol:
+            if self._frozen and self.emit_unks:
                 return self._mapping[self.unk_symbol]
             elif self._frozen:
                 raise ValueError('Vocabulary is frozen. Key "%s" not found.' % (k,))

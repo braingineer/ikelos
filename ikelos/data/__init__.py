@@ -1,6 +1,7 @@
-from vocabulary import Vocabulary
-from vocab_manager import VocabManager
-from data_server import DataServer
+from __future__ import absolute_import
+from .vocabulary import Vocabulary
+from .vocab_manager import VocabManager
+from .data_server import DataServer
 from .. import utils
 
 import os 

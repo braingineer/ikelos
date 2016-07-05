@@ -389,3 +389,215 @@ class BranchLSTM(LSTM):
             return outputs
         else:
             return last_output
+
+
+class RTTN(Recurrent):  
+    '''Recurrent Tree Traversal Network
+
+    # Arguments
+        See GRU
+
+    # Notes
+        - 
+    '''  
+
+
+    def __init__(self, output_dim,
+                 init='glorot_uniform', inner_init='orthogonal',
+                 activation='tanh', inner_activation='hard_sigmoid',
+                 W_regularizer=None, U_regularizer=None, b_regularizer=None,
+                 dropout_W=0., dropout_U=0., **kwargs):
+        self.output_dim = output_dim
+        self.init = initializations.get(init)
+        self.inner_init = initializations.get(inner_init)
+        self.activation = activations.get(activation)
+        self.inner_activation = activations.get(inner_activation)
+        self.W_regularizer = regularizers.get(W_regularizer)
+        self.U_regularizer = regularizers.get(U_regularizer)
+        self.b_regularizer = regularizers.get(b_regularizer)
+        self.dropout_W, self.dropout_U = dropout_W, dropout_U
+
+        if self.dropout_W or self.dropout_U:
+            self.uses_learning_phase = True
+        super(RTTN, self).__init__(**kwargs)
+
+    def compute_mask(self, input, mask):
+        if self.return_sequences:
+            if isinstance(mask, list):
+                return [mask[0], mask[0]]
+            return [mask, mask]
+        else:
+            return [None, None]
+        
+    def get_output_shape_for(self, input_shapes):
+        rnn_shape, indices_shape = input_shapes
+        out_shape = super(RTTN, self).get_output_shape_for(rnn_shape)
+        return [out_shape, out_shape]
+
+    def build(self, input_shape):
+        self.input_spec = [InputSpec(shape=input_shape)]
+        self.input_dim = input_shape[2]
+        if self.stateful:
+            self.reset_states()
+        else:
+            # initial states: all-zero tensor of shape (output_dim)
+            self.states = [None, None]
+
+        assert self.consume_less == "gpu"
+
+        self.W_x = self.init((self.input_dim, 4 * self.output_dim), 
+                           name='{}_W_x'.format(self.name))
+        self.W_d = self.init((self.output_dim, 3 * self.output_dim), 
+                           name='{}_W_d'.format(self.name))
+        self.U_p = self.inner_init((self.output_dim, 3 * self.output_dim), 
+                                   name='{}_U_p'.format(self.name))
+        self.U_v = self.inner_init((self.output_dim, 3 * self.output_dim), 
+                                   name='{}_U_v'.format(self.name))
+        self.b_x = K.variable(np.zeros(4 * self.output_dim), 
+                              name='{}_b_x'.format(self.name))
+        self.b_d = K.variable(np.zeros(3 * self.output_dim), 
+                              name='{}_b_d'.format(self.name))
+        self.trainable_weights = [self.W_x, self.W_d, 
+                                  self.U_p, self.U_v, 
+                                  self.b_x, self.b_d]
+
+    def reset_states(self):
+        assert self.stateful, 'Layer must be stateful.'
+        input_shape = self.input_spec[0].shape
+        if not input_shape[0]:
+            raise Exception('If a RNN is stateful, a complete ' +
+                            'input_shape must be provided (including batch size).')
+        if hasattr(self, 'states'):
+            K.set_value(self.states[0],
+                        np.zeros((input_shape[0], self.output_dim)))
+            K.set_value(self.states[1],
+                        np.zeros((input_shape[0], self.output_dim)))
+        else:
+            self.states = [K.zeros((input_shape[0], self.output_dim)), 
+                           K.zeros((input_shape[0], self.output_dim))]
+
+    def preprocess_input(self, x):
+        return x
+
+    def get_initial_states(self, x):
+        # build an all-zero tensor of shape (samples, output_dim)
+        initial_state = K.zeros_like(x)  # (samples, timesteps, input_dim)
+        initial_state = K.permute_dimensions(x, [1,0,2]) # (timesteps, samples, input_dim)
+        reducer = K.zeros((self.input_dim, self.output_dim))
+        initial_state = K.dot(initial_state, reducer)  # (timesteps, samples, output_dim)
+        initial_states = [initial_state for _ in range(len(self.states))]
+        return initial_states
+
+    def step(self, x, states):
+
+        (h_p, h_v) = states[0]
+        B_U = states[1]
+        B_W = states[2]
+
+        matrix_x = K.dot(x * B_W[0], self.W_x) + self.b_x
+        matrix_p = K.dot(h_p * B_U[0], self.U_p[:, :2 * self.output_dim])
+        matrix_v = K.dot(h_v * B_U[0], self.U_v[:, :2 * self.output_dim])
+
+        x_zp = matrix_x[:, :self.output_dim]
+        x_rp = matrix_x[:, self.output_dim: 2 * self.output_dim]
+        x_rv = matrix_x[:, 2 * self.output_dim: 3 * self.output_dim]
+        x_ih = matrix_x[:, 3 * self.output_dim:]
+
+        inner_zp = matrix_p[:, :self.output_dim]
+        inner_zv = matrix_v[:, :self.output_dim]
+        inner_rp = matrix_p[:, self.output_dim: 2 * self.output_dim]
+        inner_rv = matrix_v[:, self.output_dim: 2 * self.output_dim]
+
+        z_p = self.inner_activation(x_zp + inner_zp)
+        r_p = self.inner_activation(x_rp + inner_rp)
+        r_v = self.inner_activation(x_rv + inner_rv)
+
+        inner_hp = K.dot(inner_rp * h_p * B_U[0], self.U_p[:, 2 * self.output_dim:])
+        inner_hv = K.dot(inner_rv * h_v * B_U[0], self.U_v[:, 2 * self.output_dim:])
+        h_d_tilde = self.activation(x_ih + inner_hp + inner_hv)
+        h_d = z_p * h_p + (1 - z_p) * h_d_tilde
+
+        matrix_d = K.dot(h_d * B_W[0], self.W_d) + self.b_d
+
+        hd_zv = matrix_d[:, :self.output_dim]
+        hd_rv = matrix_d[:, self.output_dim: 2 * self.output_dim]
+        hd_ih = matrix_d[:, 2 * self.output_dim:]
+
+        z_v = self.inner_activation(hd_zv + inner_zv)
+        r_v2 = self.inner_activation(hd_rv + inner_rv)
+
+        inner_hvp1 = K.dot(r_v2 * h_v * B_U[0], self.U_v[:, 2 * self.output_dim:])
+        h_vp1_tilde = self.activation(hd_ih + inner_hvp1)
+        h_vp1 = z_v * h_v + (1 - z_v) * h_vp1_tilde
+
+        return h_d, [h_d, h_vp1]
+
+    def call(self, x_plus_idx, mask=None):
+        x, indices = x_plus_idx
+        if isinstance(mask, list):
+            mask, _ = mask
+        input_shape = self.input_spec[0].shape
+
+        if self.stateful:
+            initial_states = self.states
+        else:
+            initial_states = self.get_initial_states(x)
+
+        constants = self.get_constants(x)
+        preprocessed_input = self.preprocess_input(x)
+
+        last_output, outputs, states = K.rttn( self.step, 
+                                               preprocessed_input,
+                                               initial_states, 
+                                               indices,
+                                               go_backwards=self.go_backwards,
+                                               mask=mask,
+                                               constants=constants,
+                                               unroll=self.unroll,
+                                               input_length=input_shape[1])
+
+        last_tree, last_summary = last_output
+        tree_outputs, summary_outputs = outputs
+
+        if self.stateful:
+            self.updates = []
+            for i in range(len(states)):
+                self.updates.append((self.states[i], states[i]))
+            self.cached_states = states
+
+        return [tree_outputs, summary_outputs]
+
+    def get_constants(self, x):
+        constants = []
+        if 0 < self.dropout_U < 1:
+            ones = K.ones_like(K.reshape(x[:, 0, 0], (-1, 1)))
+            ones = K.concatenate([ones] * self.output_dim, 1)
+            B_U = [K.in_train_phase(K.dropout(ones, self.dropout_U), ones) for _ in range(3)]
+            constants.append(B_U)
+        else:
+            constants.append([K.cast_to_floatx(1.) for _ in range(3)])
+
+        if 0 < self.dropout_W < 1:
+            input_shape = self.input_spec[0].shape
+            input_dim = input_shape[-1]
+            ones = K.ones_like(K.reshape(x[:, 0, 0], (-1, 1)))
+            ones = K.concatenate([ones] * input_dim, 1)
+            B_W = [K.in_train_phase(K.dropout(ones, self.dropout_W), ones) for _ in range(3)]
+            constants.append(B_W)
+        else:
+            constants.append([K.cast_to_floatx(1.) for _ in range(3)])
+        return constants
+
+    def get_config(self):
+        config = {'output_dim': self.output_dim,
+                  'init': self.init.__name__,
+                  'inner_init': self.inner_init.__name__,
+                  'activation': self.activation.__name__,
+                  'inner_activation': self.inner_activation.__name__,
+                  'W_regularizer': self.W_regularizer.get_config() if self.W_regularizer else None,
+                  'U_regularizer': self.U_regularizer.get_config() if self.U_regularizer else None,
+                  'b_regularizer': self.b_regularizer.get_config() if self.b_regularizer else None,
+                  'dropout_W': self.dropout_W,
+                  'dropout_U': self.dropout_U}
+        base_config = super(GRU, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))

@@ -1,7 +1,8 @@
+from __future__ import absolute_import
 import keras.backend as K
 from keras.engine import merge
 from ..layers import PassThrough
-import loggers
+from . import loggers
 
 def normalize_mask(x, mask):
     '''Keep the mask align wtih the tensor x

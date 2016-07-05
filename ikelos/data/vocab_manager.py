@@ -109,7 +109,7 @@ class VocabManager(object):
 
     @classmethod
     def from_file(cls, filename, updated_filepath=None):
-        with open(filename) as fp:
+        with open(filename, 'rb') as fp:
             config = pickle.load(fp)
         my_dir = "/".join(filename.split("/")[:-1])
         update = lambda s: os.path.join(my_dir, s.split("/")[-1])
