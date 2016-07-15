@@ -10,7 +10,7 @@ from keras.layers import Recurrent, time_distributed_dense, LSTM
 import keras.backend as K
 from keras import activations, initializations, regularizers
 from keras.engine import Layer, InputSpec
-
+import numpy as np
 
 
 class DualCurrent(Recurrent):
@@ -406,7 +406,7 @@ class RTTN(Recurrent):
                  init='glorot_uniform', inner_init='orthogonal',
                  activation='tanh', inner_activation='hard_sigmoid',
                  W_regularizer=None, U_regularizer=None, b_regularizer=None,
-                 dropout_W=0., dropout_U=0., **kwargs):
+                 shape_key=None, dropout_W=0., dropout_U=0., **kwargs):
         self.output_dim = output_dim
         self.init = initializations.get(init)
         self.inner_init = initializations.get(inner_init)
@@ -416,50 +416,84 @@ class RTTN(Recurrent):
         self.U_regularizer = regularizers.get(U_regularizer)
         self.b_regularizer = regularizers.get(b_regularizer)
         self.dropout_W, self.dropout_U = dropout_W, dropout_U
+        self.shape_key = shape_key or {}
 
         if self.dropout_W or self.dropout_U:
             self.uses_learning_phase = True
+        kwargs['consume_less'] = 'gpu'
         super(RTTN, self).__init__(**kwargs)
+        
+        self.num_actions = 4
 
     def compute_mask(self, input, mask):
         if self.return_sequences:
             if isinstance(mask, list):
-                return [mask[0], mask[0]]
-            return [mask, mask]
+                return [mask[0] for _ in range(4)]
+            return [mask for _ in range(4)]
         else:
-            return [None, None]
+            return [None, None, None, None]
         
     def get_output_shape_for(self, input_shapes):
-        rnn_shape, indices_shape = input_shapes
-        out_shape = super(RTTN, self).get_output_shape_for(rnn_shape)
-        return [out_shape, out_shape]
+        '''given all inputs, compute output shape for all outputs
+        
+        crazy shape computations.  super verbose and ugly now to make the code readable
+        '''
+        ##  normal in shapes are (batch, sequence, in_size)
+        ## normal out shapes are (batch, sequence, out_size)
+        ## horizon is (batch, sequence, sequence/horizon, features)
+        ## horizon features is going to be concatenated branch and word feature vectors
+        ## p_horizon is (batch, sequence, sequence/horizon)
+        in_shape = input_shapes[0]
+        out_shape = super(RTTN, self).get_output_shape_for(in_shape)
+        b, s, fin = in_shape
+        b, s, fout = out_shape
+        w = self.shape_key['word']
+        h = self.shape_key['horizon']
+        horizon_shape = (b, s, h, w+fout)
+        p_horizon_shape = (b, s, h)
+        #horizon_shape = out_shape[:-1] (self.shape_key['horizon'], 
+        #                                in_shape[-1] + out_shape[-1])
+        #p_horizon_shape = out_shape[:-1] + (self.shape_key['horizon'],)
+        
+        return [out_shape, out_shape, horizon_shape, p_horizon_shape]
 
-    def build(self, input_shape):
-        self.input_spec = [InputSpec(shape=input_shape)]
-        self.input_dim = input_shape[2]
-        if self.stateful:
-            self.reset_states()
-        else:
-            # initial states: all-zero tensor of shape (output_dim)
-            self.states = [None, None]
+    def build(self, input_shapes):
+        assert isinstance(input_shapes, list)
+        rnn_shape, indices_shape = input_shapes[0], input_shapes[1]
+        self.input_spec = [InputSpec(shape=rnn_shape), InputSpec(shape=indices_shape)] 
+        self.input_spec += [InputSpec(shape=None) for _ in range(len(input_shapes)-2)]
+        self.input_dim = rnn_shape[2]
+
+        # initial states: all-zero tensor of shape (output_dim)
+        self.states = [None, None]
 
         assert self.consume_less == "gpu"
+        
+        ### NOTES. the 4 here is for 4 action types: sub/ins, left/right. 
+        self.W_x = self.init((self.num_actions, self.input_dim, 4 * self.output_dim), 
+                                  name='{}_W_x'.format(self.name))
+        self.b_x = K.variable(np.zeros(4 * self.output_dim), 
+                              name='{}_b_x'.format(self.name))
 
-        self.W_x = self.init((self.input_dim, 4 * self.output_dim), 
-                           name='{}_W_x'.format(self.name))
-        self.W_d = self.init((self.output_dim, 3 * self.output_dim), 
-                           name='{}_W_d'.format(self.name))
+        ### used for parent node and traversal node recurrence computations
         self.U_p = self.inner_init((self.output_dim, 3 * self.output_dim), 
                                    name='{}_U_p'.format(self.name))
         self.U_v = self.inner_init((self.output_dim, 3 * self.output_dim), 
                                    name='{}_U_v'.format(self.name))
-        self.b_x = K.variable(np.zeros(4 * self.output_dim), 
-                              name='{}_b_x'.format(self.name))
-        self.b_d = K.variable(np.zeros(3 * self.output_dim), 
-                              name='{}_b_d'.format(self.name))
-        self.trainable_weights = [self.W_x, self.W_d, 
+
+        ### used for the child node computation
+        self.U_c = self.init((self.output_dim, 3 * self.output_dim), 
+                           name='{}_U_c'.format(self.name))
+        self.b_c = K.variable(np.zeros(3 * self.output_dim), 
+                              name='{}_b_c'.format(self.name))
+
+        self.W_ctx = self.init( (self.output_dim, self.shape_key['word'] + self.output_dim), 
+                                name='{}_W_context'.format(self.name))
+        
+        self.trainable_weights = [self.W_x, self.U_c, 
                                   self.U_p, self.U_v, 
-                                  self.b_x, self.b_d]
+                                  self.b_x, self.b_c, 
+                                  self.W_ctx]
 
     def reset_states(self):
         assert self.stateful, 'Layer must be stateful.'
@@ -471,13 +505,10 @@ class RTTN(Recurrent):
             K.set_value(self.states[0],
                         np.zeros((input_shape[0], self.output_dim)))
             K.set_value(self.states[1],
-                        np.zeros((input_shape[0], self.output_dim)))
+                        np.zeros((input_shapes[1], input_shape[0], self.output_dim)))
         else:
-            self.states = [K.zeros((input_shape[0], self.output_dim)), 
-                           K.zeros((input_shape[0], self.output_dim))]
-
-    def preprocess_input(self, x):
-        return x
+            self.states = [K.zeros((input_shape[0], self.output_dim)),
+                           K.zeros((input_shapes[1], input_shape[0], self.output_dim))]
 
     def get_initial_states(self, x):
         # build an all-zero tensor of shape (samples, output_dim)
@@ -485,87 +516,94 @@ class RTTN(Recurrent):
         initial_state = K.permute_dimensions(x, [1,0,2]) # (timesteps, samples, input_dim)
         reducer = K.zeros((self.input_dim, self.output_dim))
         initial_state = K.dot(initial_state, reducer)  # (timesteps, samples, output_dim)
-        initial_states = [initial_state for _ in range(len(self.states))]
+        initial_traversal = K.sum(initial_state, axis=0) # traversal is (samples, output_dim) 
+        initial_states = [initial_traversal, initial_state] # this order matches assumptions in rttn scan function
         return initial_states
 
     def step(self, x, states):
+        (h_p, h_v,   # 0:parent, 1:traversal 
+         x_type,     # 2:treetype(ins/sub,left/right); ints of size (B,). \in {0,1,2,3}
+         B_U, B_W) = states  # 3:Udropoutmask, 4:Wdropoutmask
 
-        (h_p, h_v) = states[0]
-        B_U = states[1]
-        B_W = states[2]
-
-        matrix_x = K.dot(x * B_W[0], self.W_x) + self.b_x
-        matrix_p = K.dot(h_p * B_U[0], self.U_p[:, :2 * self.output_dim])
-        matrix_v = K.dot(h_v * B_U[0], self.U_v[:, :2 * self.output_dim])
-
+        #### matrix x has all 4 x computations in it 
+        ## per move
+        this_Wx = self.W_x[x_type] ## B, I, 4*O
+        matrix_x = K.batch_dot(x * B_W[0], this_Wx) + self.b_x 
         x_zp = matrix_x[:, :self.output_dim]
         x_rp = matrix_x[:, self.output_dim: 2 * self.output_dim]
         x_rv = matrix_x[:, 2 * self.output_dim: 3 * self.output_dim]
         x_ih = matrix_x[:, 3 * self.output_dim:]
 
-        inner_zp = matrix_p[:, :self.output_dim]
-        inner_zv = matrix_v[:, :self.output_dim]
-        inner_rp = matrix_p[:, self.output_dim: 2 * self.output_dim]
-        inner_rv = matrix_v[:, self.output_dim: 2 * self.output_dim]
+        #### matrix p has zp, rp; matrix v has zv, rv
+        matrix_p = K.dot(h_p * B_U[0], self.U_p[:, :2 * self.output_dim])
 
+        # zp is for the parent unit update (resulting in child unit)
+        inner_zp = matrix_p[:, :self.output_dim]
         z_p = self.inner_activation(x_zp + inner_zp)
+
+        # rp is for gating to the intermediate unit of parent 
+        inner_rp = matrix_p[:, self.output_dim: 2 * self.output_dim]
         r_p = self.inner_activation(x_rp + inner_rp)
+
+        matrix_v = K.dot(h_v * B_U[0], self.U_v[:, :2 * self.output_dim])
+        # rv is for the intermediate gate on the traversal unit
+        # this gets reused for both the parent's and its own intermediate 
+        inner_rv = matrix_v[:, self.output_dim: 2 * self.output_dim]
         r_v = self.inner_activation(x_rv + inner_rv)
 
-        inner_hp = K.dot(inner_rp * h_p * B_U[0], self.U_p[:, 2 * self.output_dim:])
-        inner_hv = K.dot(inner_rv * h_v * B_U[0], self.U_v[:, 2 * self.output_dim:])
-        h_d_tilde = self.activation(x_ih + inner_hp + inner_hv)
-        h_d = z_p * h_p + (1 - z_p) * h_d_tilde
+        # the actual recurrence calculations
+        # h_p * U and h_v * U ; as gated by their r gates
+        inner_hp = K.dot(r_p * h_p * B_U[0], self.U_p[:, 2 * self.output_dim:])
+        inner_hv = K.dot(r_v * h_v * B_U[0], self.U_v[:, 2 * self.output_dim:])
+        # h_c_tilde is the intermediate state 
+        h_c_tilde = self.activation(x_ih + inner_hp + inner_hv)
+        # h_c is the new child state
+        h_c = z_p * h_c_tilde + (1 - z_p) * h_p 
 
-        matrix_d = K.dot(h_d * B_W[0], self.W_d) + self.b_d
+        matrix_c = K.dot(h_c * B_U[0], self.U_c) + self.b_c
 
-        hd_zv = matrix_d[:, :self.output_dim]
-        hd_rv = matrix_d[:, self.output_dim: 2 * self.output_dim]
-        hd_ih = matrix_d[:, 2 * self.output_dim:]
+        hc_zv = matrix_c[:, :self.output_dim]
+        hc_rv = matrix_c[:, self.output_dim: 2 * self.output_dim]
+        hc_ih = matrix_c[:, 2 * self.output_dim:]
 
-        z_v = self.inner_activation(hd_zv + inner_zv)
-        r_v2 = self.inner_activation(hd_rv + inner_rv)
+        ### zv -> gate h_v  and h_v_tilde
+        ### rv -> gate h_v's contribution to h_v_tilde
+        ### ih -> h_c's contribution to h_v_tilde
 
-        inner_hvp1 = K.dot(r_v2 * h_v * B_U[0], self.U_v[:, 2 * self.output_dim:])
-        h_vp1_tilde = self.activation(hd_ih + inner_hvp1)
-        h_vp1 = z_v * h_v + (1 - z_v) * h_vp1_tilde
+        # zv is for the traversal unit update. 
+        inner_zv = matrix_v[:, :self.output_dim]
+        z_v = self.inner_activation(hc_zv + inner_zv)
+        ## r_v is calculated with h_c rather than x
+        r_v = self.inner_activation(hc_rv + inner_rv)
 
-        return h_d, [h_d, h_vp1]
+        inner_hvplus = K.dot(r_v * h_v * B_U[0], self.U_v[:, 2 * self.output_dim:])
+        h_vplus_tilde = self.activation(hc_ih + inner_hvplus)
+        h_vplus = z_v * h_v + (1 - z_v) * h_vplus_tilde
 
-    def call(self, x_plus_idx, mask=None):
-        x, indices = x_plus_idx
+        return h_c, h_vplus
+        
+    def call(self, all_inputs, mask=None):
+        x_in, topology, x_types, horizon_w, horizon_i = all_inputs
+        horizon = [horizon_w, horizon_i]
         if isinstance(mask, list):
-            mask, _ = mask
-        input_shape = self.input_spec[0].shape
+            mask = mask[0]
+        assert not self.stateful
+        initial_states = self.get_initial_states(x_in)
+        constants = self.get_constants(x_in)
 
-        if self.stateful:
-            initial_states = self.states
-        else:
-            initial_states = self.get_initial_states(x)
+        states = K.rttn( self.step, 
+                           x_in,
+                           initial_states, 
+                           topology,
+                           x_types,
+                           horizon, 
+                           self.shape_key,
+                           self.W_ctx,
+                           mask=mask,
+                           constants=constants )
+        branch_tensor, traversal_tensor, horizon_states, p_horizons = states
 
-        constants = self.get_constants(x)
-        preprocessed_input = self.preprocess_input(x)
-
-        last_output, outputs, states = K.rttn( self.step, 
-                                               preprocessed_input,
-                                               initial_states, 
-                                               indices,
-                                               go_backwards=self.go_backwards,
-                                               mask=mask,
-                                               constants=constants,
-                                               unroll=self.unroll,
-                                               input_length=input_shape[1])
-
-        last_tree, last_summary = last_output
-        tree_outputs, summary_outputs = outputs
-
-        if self.stateful:
-            self.updates = []
-            for i in range(len(states)):
-                self.updates.append((self.states[i], states[i]))
-            self.cached_states = states
-
-        return [tree_outputs, summary_outputs]
+        return [branch_tensor, traversal_tensor, horizon_states, p_horizons]
 
     def get_constants(self, x):
         constants = []
@@ -599,5 +637,5 @@ class RTTN(Recurrent):
                   'b_regularizer': self.b_regularizer.get_config() if self.b_regularizer else None,
                   'dropout_W': self.dropout_W,
                   'dropout_U': self.dropout_U}
-        base_config = super(GRU, self).get_config()
+        base_config = super(RTTN, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))

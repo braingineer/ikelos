@@ -101,7 +101,7 @@ class Vocabulary(object):
     #### iter items, fullitems and items
 
     def iteritems(self):
-        for k,v in self._mapping.iteritems():
+        for k,v in self._mapping.items():
             if k==self.unk_symbol or k==self.mask_symbol:
                 continue
             yield k,v
@@ -208,14 +208,16 @@ class Vocabulary(object):
         if not os.path.exists(filename):
             warnings.warn("file not found", RuntimeWarning)
             return cls()
-        with open(filename) as fp:
-            if file_type == 'json':
-                config = json.load(fp)
-            elif file_type == 'pickle':
+        
+        if file_type == 'json':
+            with open(filename, 'r') as fp:
+                config = json.load(fp)    
+        elif file_type == 'pickle':
+            with open(filename, 'rb') as fp:
                 config = pickle.load(fp)
-            else:
-                warnings.warn("Configuration type not understood", RuntimeWarning)
-                return cls()
+        else:
+            warnings.warn("Configuration type not understood", RuntimeWarning)
+            return cls()
         return cls.from_config(config)
 
     def _config(self):
