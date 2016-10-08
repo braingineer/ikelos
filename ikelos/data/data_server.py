@@ -26,8 +26,6 @@ class DataServer(object):
     """
     def __init__(self, config):
         self.__dict__.update(config)
-        log_name = self.saving_prefix
-        self.logger = loggers.duallog(log_name, "info", "logs/", disable=self.disable_logger)
 
 
     def print_everything(self):
@@ -51,9 +49,14 @@ class DataServer(object):
         
     @property
     def num_train_samples(self):
+        num_samples = self.num_train_batches * self.batch_size
         if self.subepochs > 0:
-            return self.num_train_batches // self.subepochs * self.batch_size
-        return self.num_train_batches * self.batch_size
+            reduced_number = num_samples // self.subepochs
+            self.logger.info("+ {} subepochs reduces ".format(self.subepochs) + 
+                             "  {} per epoch to {}".format(num_samples, 
+                                                           reduced_number))
+            return reduced_number
+        return num_samples
         
     @property
     def num_dev_samples(self):

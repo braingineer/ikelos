@@ -10,6 +10,7 @@ from keras.layers import Recurrent, time_distributed_dense, LSTM
 import keras.backend as K
 from keras import activations, initializations, regularizers
 from keras.engine import Layer, InputSpec
+import ikelos.backend.theano_backend as IKE
 import numpy as np
 
 
@@ -237,7 +238,7 @@ class DualCurrent(Recurrent):
         constants = self.get_constants(x)
         preprocessed_input = self.preprocess_input(x)
 
-        last_output, outputs, states = K.dualsignal_rnn(self.step, 
+        last_output, outputs, states = IKE.dualsignal_rnn(self.step, 
                                                    preprocessed_input,
                                                    initial_states, 
                                                    indices,
@@ -370,7 +371,7 @@ class BranchLSTM(LSTM):
         constants = self.get_constants(x)
         preprocessed_input = self.preprocess_input(x)
 
-        last_output, outputs, states = K.stack_rnn(self.step, 
+        last_output, outputs, states = IKE.stack_rnn(self.step, 
                                                    preprocessed_input,
                                                    initial_states, 
                                                    indices,
@@ -591,7 +592,7 @@ class RTTN(Recurrent):
         initial_states = self.get_initial_states(x_in)
         constants = self.get_constants(x_in)
 
-        states = K.rttn( self.step, 
+        states = IKE.rttn( self.step, 
                            x_in,
                            initial_states, 
                            topology,

@@ -7,15 +7,18 @@ from keras.layers import Dense, Wrapper, Distribute
 import keras.backend as K
 from keras import activations, initializations, regularizers
 from keras.engine import Layer, InputSpec
-from keras.activations import softmax
+#from keras.activations import softmax
 import numpy as np
 
 def make_safe(x):
     return K.clip(x, K.common._EPSILON, 1.0 - K.common._EPSILON)
 
 
-
-
+def softmax(x):
+    e = K.exp(x - K.max(x, axis=-1, keepdims=True))
+    s = K.sum(e, axis=-1, keepdims=True)
+    return e / s
+    
 class ProbabilityTensor(Wrapper):
     """ function for turning 3d tensor to 2d probability matrix """
     def __init__(self, dense_function=None, *args, **kwargs):

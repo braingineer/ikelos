@@ -17,6 +17,7 @@ class DynamicEmbedding(Embedding):
             indim, outdim = self.W._keras_shape
 
         self.mode = mode
+        kwargs['mask_zero'] = True
         super(DynamicEmbedding, self).__init__(indim, outdim, *args, **kwargs)
 
         #layer, node_index, tensor_index = self.W._keras_history
@@ -51,9 +52,9 @@ class DynamicEmbedding(Embedding):
 
     def compute_mask(self, x, mask=None):
         if isinstance(x, list):
-            x,_ = x
+            x, _ = x
         if mask is not None and isinstance(mask, list):
-            mask,_ = mask
+            mask, _ = mask
         return super(DynamicEmbedding, self).compute_mask(x, mask)
 
     def get_output_shape_for(self, input_shape):
